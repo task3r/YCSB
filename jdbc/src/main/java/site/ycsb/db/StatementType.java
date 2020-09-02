@@ -44,12 +44,12 @@ public class StatementType {
   private String tableName;
   private String fieldString;
 
-  public StatementType(Type type, String tableName, int numFields, String fieldString, int shardIndex) {
+  public StatementType(Type type, String tableName, int numFields, String fieldString) {
     this.type = type;
     this.tableName = tableName;
     this.numFields = numFields;
     this.fieldString = fieldString;
-    this.shardIndex = shardIndex;
+    this.shardIndex = 0;
   }
 
   public String getTableName() {
