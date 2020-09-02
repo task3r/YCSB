@@ -101,6 +101,9 @@ public class JdbcDBClient extends DB {
    * particular database. Current database flavors are: {default, phoenix} */
   private DBFlavor dbFlavor;
 
+  private int transactionSize = 0;
+  private final int transactionCommitSize = 5;
+
   /**
    * Ordered field information for insert and update statements.
    */
@@ -346,6 +349,7 @@ public class JdbcDBClient extends DB {
       }
       readStatement.setString(1, key);
       ResultSet resultSet = readStatement.executeQuery();
+      maybeCommit(key);
       if (!resultSet.next()) {
         resultSet.close();
         return Status.NOT_FOUND;
@@ -418,6 +422,7 @@ public class JdbcDBClient extends DB {
       }
       updateStatement.setString(index, key);
       int result = updateStatement.executeUpdate();
+      maybeCommit(key);
       if (result == 1) {
         return Status.OK;
       }
@@ -506,6 +511,7 @@ public class JdbcDBClient extends DB {
       }
       deleteStatement.setString(1, key);
       int result = deleteStatement.executeUpdate();
+      maybeCommit(key);
       if (result == 1) {
         return Status.OK;
       }
@@ -530,5 +536,15 @@ public class JdbcDBClient extends DB {
     }
 
     return new OrderedFieldInfo(fieldKeys, fieldValues);
+  }
+
+  private void maybeCommit(String key) throws SQLException {
+    if (!autoCommit) {
+      transactionSize++;
+      if (transactionSize >= transactionCommitSize) {
+        getShardConnectionByKey(key).commit();
+        transactionSize = 0;
+      }
+    }
   }
 }
