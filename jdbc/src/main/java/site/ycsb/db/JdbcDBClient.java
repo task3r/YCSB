@@ -1,12 +1,12 @@
 /**
  * Copyright (c) 2010 - 2016 Yahoo! Inc., 2016, 2019 YCSB contributors. All rights reserved.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
  * may obtain a copy of the License at
- *
+ * <p>
  * http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
@@ -26,6 +26,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
 import site.ycsb.db.flavors.DBFlavor;
 
 /**
@@ -44,47 +45,75 @@ import site.ycsb.db.flavors.DBFlavor;
  */
 public class JdbcDBClient extends DB {
 
-  /** The class to use as the jdbc driver. */
+  /**
+   * The class to use as the jdbc driver.
+   */
   public static final String DRIVER_CLASS = "db.driver";
 
-  /** The URL to connect to the database. */
+  /**
+   * The URL to connect to the database.
+   */
   public static final String CONNECTION_URL = "db.url";
 
-  /** The user name to use to connect to the database. */
+  /**
+   * The user name to use to connect to the database.
+   */
   public static final String CONNECTION_USER = "db.user";
 
-  /** The password to use for establishing the connection. */
+  /**
+   * The password to use for establishing the connection.
+   */
   public static final String CONNECTION_PASSWD = "db.passwd";
 
-  /** The batch size for batched inserts. Set to >0 to use batching */
+  /**
+   * The batch size for batched inserts. Set to >0 to use batching
+   */
   public static final String DB_BATCH_SIZE = "db.batchsize";
 
-  /** The JDBC fetch size hinted to the driver. */
+  /**
+   * The JDBC fetch size hinted to the driver.
+   */
   public static final String JDBC_FETCH_SIZE = "jdbc.fetchsize";
 
-  /** The JDBC connection auto-commit property for the driver. */
+  /**
+   * The JDBC connection auto-commit property for the driver.
+   */
   public static final String JDBC_AUTO_COMMIT = "jdbc.autocommit";
 
   public static final String JDBC_BATCH_UPDATES = "jdbc.batchupdateapi";
 
-  /** The name of the property for the number of fields in a record. */
+  /**
+   * The name of the property for the number of fields in a record.
+   */
   public static final String FIELD_COUNT_PROPERTY = "fieldcount";
 
-  /** Default number of fields in a record. */
+  /**
+   * Default number of fields in a record.
+   */
   public static final String FIELD_COUNT_PROPERTY_DEFAULT = "10";
 
-  /** Representing a NULL value. */
+  /**
+   * Representing a NULL value.
+   */
   public static final String NULL_VALUE = "NULL";
 
-  /** The primary key in the user table. */
+  /**
+   * The primary key in the user table.
+   */
   public static final String PRIMARY_KEY = "YCSB_KEY";
 
-  /** The field name prefix in the table. */
+  /**
+   * The field name prefix in the table.
+   */
   public static final String COLUMN_PREFIX = "FIELD";
 
-  /** SQL:2008 standard: FETCH FIRST n ROWS after the ORDER BY. */
+  /**
+   * SQL:2008 standard: FETCH FIRST n ROWS after the ORDER BY.
+   */
   private boolean sqlansiScans = false;
-  /** SQL Server before 2012: TOP n after the SELECT. */
+  /**
+   * SQL Server before 2012: TOP n after the SELECT.
+   */
   private boolean sqlserverScans = false;
 
   private List<Connection> conns;
@@ -97,14 +126,21 @@ public class JdbcDBClient extends DB {
   private static final String DEFAULT_PROP = "";
   private ConcurrentMap<StatementType, PreparedStatement> cachedStatements;
   private long numRowsInBatch = 0;
-  /** DB flavor defines DB-specific syntax and behavior for the
-   * particular database. Current database flavors are: {default, phoenix} */
+  /**
+   * DB flavor defines DB-specific syntax and behavior for the
+   * particular database. Current database flavors are: {default, phoenix}
+   */
   private DBFlavor dbFlavor;
 
   private int transactionSize = 0;
   private final int transactionCommitSize = 5;
   private Connection currentConnection;
   private int connectionIndex = 0;
+  private List<PreparedStatement> preparedStatements = new ArrayList<>();
+
+  private int transactions = 0;
+  private int commits = 0;
+  private int aborts = 0;
 
   /**
    * Ordered field information for insert and update statements.
@@ -137,14 +173,13 @@ public class JdbcDBClient extends DB {
 
   private void cleanupAllConnections() throws SQLException {
     for (Connection conn : conns) {
-      if (!autoCommit) {
-        conn.commit();
-      }
       conn.close();
     }
   }
 
-  /** Returns parsed int value from the properties if set, otherwise returns -1. */
+  /**
+   * Returns parsed int value from the properties if set, otherwise returns -1.
+   */
   private static int getIntProperty(Properties props, String key) throws DBException {
     String valueStr = props.getProperty(key);
     if (valueStr != null) {
@@ -158,7 +193,9 @@ public class JdbcDBClient extends DB {
     return -1;
   }
 
-  /** Returns parsed boolean value from the properties if set, otherwise returns defaultVal. */
+  /**
+   * Returns parsed boolean value from the properties if set, otherwise returns defaultVal.
+   */
   private static boolean getBoolProperty(Properties props, String key, boolean defaultVal) {
     String valueStr = props.getProperty(key);
     if (valueStr != null) {
@@ -225,6 +262,7 @@ public class JdbcDBClient extends DB {
         shardCount++;
         conns.add(conn);
       }
+      Collections.shuffle(conns);
 
       System.out.println("Using shards: " + shardCount + ", batchSize:" + batchSize + ", fetchSize: " + jdbcFetchSize);
 
@@ -242,22 +280,24 @@ public class JdbcDBClient extends DB {
       throw new DBException(e);
     }
 
+    Stats.getInstance().newClient();
     initialized = true;
   }
 
   @Override
-  public void cleanup() throws DBException {
+  public void cleanup() {
+    Stats.getInstance().clientFinished(commits + aborts, commits, aborts);
     if (batchSize > 0) {
       try {
         // commit un-finished batches
+
         for (PreparedStatement st : cachedStatements.values()) {
           if (!st.getConnection().isClosed() && !st.isClosed() && (numRowsInBatch % batchSize != 0)) {
             st.executeBatch();
           }
         }
       } catch (SQLException e) {
-        System.err.println("Error in cleanup execution. " + e);
-        throw new DBException(e);
+        System.err.println("Error in committing unfinished batches. " + e);
       }
     }
 
@@ -265,7 +305,6 @@ public class JdbcDBClient extends DB {
       cleanupAllConnections();
     } catch (SQLException e) {
       System.err.println("Error in closing the connection. " + e);
-      throw new DBException(e);
     }
   }
 
@@ -273,44 +312,28 @@ public class JdbcDBClient extends DB {
       throws SQLException {
     String insert = dbFlavor.createInsertStatement(insertType, key);
     PreparedStatement insertStatement = getConnection().prepareStatement(insert);
-    PreparedStatement stmt = cachedStatements.putIfAbsent(insertType, insertStatement);
-    if (stmt == null) {
-      return insertStatement;
-    }
-    return stmt;
+    return insertStatement;
   }
 
   private PreparedStatement createAndCacheReadStatement(StatementType readType, String key)
       throws SQLException {
     String read = dbFlavor.createReadStatement(readType, key);
     PreparedStatement readStatement = getConnection().prepareStatement(read);
-    PreparedStatement stmt = cachedStatements.putIfAbsent(readType, readStatement);
-    if (stmt == null) {
-      return readStatement;
-    }
-    return stmt;
+    return readStatement;
   }
 
   private PreparedStatement createAndCacheDeleteStatement(StatementType deleteType, String key)
       throws SQLException {
     String delete = dbFlavor.createDeleteStatement(deleteType, key);
     PreparedStatement deleteStatement = getConnection().prepareStatement(delete);
-    PreparedStatement stmt = cachedStatements.putIfAbsent(deleteType, deleteStatement);
-    if (stmt == null) {
-      return deleteStatement;
-    }
-    return stmt;
+    return deleteStatement;
   }
 
   private PreparedStatement createAndCacheUpdateStatement(StatementType updateType, String key)
       throws SQLException {
     String update = dbFlavor.createUpdateStatement(updateType, key);
     PreparedStatement insertStatement = getConnection().prepareStatement(update);
-    PreparedStatement stmt = cachedStatements.putIfAbsent(updateType, insertStatement);
-    if (stmt == null) {
-      return insertStatement;
-    }
-    return stmt;
+    return insertStatement;
   }
 
   private PreparedStatement createAndCacheScanStatement(StatementType scanType, String key)
@@ -337,7 +360,7 @@ public class JdbcDBClient extends DB {
       }
       readStatement.setString(1, key);
       ResultSet resultSet = readStatement.executeQuery();
-      maybeCommit();
+      maybeCommit(readStatement);
       if (!resultSet.next()) {
         resultSet.close();
         return Status.NOT_FOUND;
@@ -351,7 +374,8 @@ public class JdbcDBClient extends DB {
       resultSet.close();
       return Status.OK;
     } catch (SQLException e) {
-      System.err.println("Error in processing read of table " + tableName + ": " + e);
+//      System.err.println("Error in processing read of table " + tableName + ": " + e);
+      abort();
       return Status.ERROR;
     }
   }
@@ -369,7 +393,7 @@ public class JdbcDBClient extends DB {
       if (sqlserverScans) {
         scanStatement.setInt(1, recordcount);
         scanStatement.setString(2, startKey);
-      // FETCH FIRST and LIMIT are at the end
+        // FETCH FIRST and LIMIT are at the end
       } else {
         scanStatement.setString(1, startKey);
         scanStatement.setInt(2, recordcount);
@@ -405,18 +429,19 @@ public class JdbcDBClient extends DB {
         updateStatement = createAndCacheUpdateStatement(type, key);
       }
       int index = 1;
-      for (String value: fieldInfo.getFieldValues()) {
+      for (String value : fieldInfo.getFieldValues()) {
         updateStatement.setString(index++, value);
       }
       updateStatement.setString(index, key);
       int result = updateStatement.executeUpdate();
-      maybeCommit();
+      maybeCommit(updateStatement);
       if (result == 1) {
         return Status.OK;
       }
       return Status.UNEXPECTED_STATE;
     } catch (SQLException e) {
-      System.err.println("Error in processing update to table: " + tableName + e);
+//      System.err.println("Error in processing update to table: " + tableName + e);
+      abort();
       return Status.ERROR;
     }
   }
@@ -434,7 +459,7 @@ public class JdbcDBClient extends DB {
       }
       insertStatement.setString(1, key);
       int index = 2;
-      for (String value: fieldInfo.getFieldValues()) {
+      for (String value : fieldInfo.getFieldValues()) {
         insertStatement.setString(index++, value);
       }
       // Using the batch insert API
@@ -447,7 +472,7 @@ public class JdbcDBClient extends DB {
             int[] results = insertStatement.executeBatch();
             for (int r : results) {
               // Acceptable values are 1 and SUCCESS_NO_INFO (-2) from reWriteBatchedInserts=true
-              if (r != 1 && r != -2) { 
+              if (r != 1 && r != -2) {
                 return Status.ERROR;
               }
             }
@@ -484,7 +509,8 @@ public class JdbcDBClient extends DB {
       }
       return Status.UNEXPECTED_STATE;
     } catch (SQLException e) {
-      System.err.println("Error in processing insert to table: " + tableName + e);
+//      System.err.println("Error in processing insert to table: " + tableName + e);
+      abort();
       return Status.ERROR;
     }
   }
@@ -499,13 +525,19 @@ public class JdbcDBClient extends DB {
       }
       deleteStatement.setString(1, key);
       int result = deleteStatement.executeUpdate();
-      maybeCommit();
+      maybeCommit(deleteStatement);
       if (result == 1) {
         return Status.OK;
       }
       return Status.UNEXPECTED_STATE;
     } catch (SQLException e) {
-      System.err.println("Error in processing delete to table: " + tableName + e);
+//      System.err.println("Error in processing delete to table: " + tableName + e);
+      aborts++;
+      try {
+        getConnection().rollback();
+      } catch (SQLException ex) {
+        ex.printStackTrace();
+      }
       return Status.ERROR;
     }
   }
@@ -526,14 +558,57 @@ public class JdbcDBClient extends DB {
     return new OrderedFieldInfo(fieldKeys, fieldValues);
   }
 
-  private void maybeCommit() throws SQLException {
+  private void maybeCommit(PreparedStatement stmt) {
     if (!autoCommit) {
-      transactionSize++;
-      if (transactionSize >= transactionCommitSize) {
-        getConnection().commit();
-        transactionSize = 0;
-        currentConnection = null;
+      preparedStatements.add(stmt);
+      if (preparedStatements.size() >= transactionCommitSize) {
+        transactions++;
+        try {
+          getConnection().commit();
+          commits++;
+        } catch (SQLException e) {
+          try {
+            aborts++;
+            getConnection().rollback();
+          } catch (SQLException ex) {
+            ex.printStackTrace();
+          }
+        } finally {
+
+          for (PreparedStatement statement : preparedStatements) {
+            try {
+              statement.close();
+            } catch (SQLException e) {
+              e.printStackTrace();
+            }
+          }
+
+          preparedStatements.clear();
+          currentConnection = null;
+        }
       }
     }
+  }
+
+  private void abort() {
+    if (!autoCommit) {
+      try {
+        aborts++;
+        getConnection().rollback();
+      } catch (SQLException ex) {
+        ex.printStackTrace();
+      }
+    }
+
+    for (PreparedStatement statement : preparedStatements) {
+      try {
+        statement.close();
+      } catch (SQLException e) {
+        e.printStackTrace();
+      }
+    }
+
+    preparedStatements.clear();
+    currentConnection = null;
   }
 }
